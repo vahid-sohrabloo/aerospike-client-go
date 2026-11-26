@@ -475,7 +475,8 @@ func TestFastResultViewsSurviveLaterRecords(t *testing.T) {
 	}
 }
 
-func TestFastResultWriteRetrySkipsAnswered(t *testing.T) {
+func fastTestServerClient(t *testing.T) *Client {
+	t.Helper()
 	h, p := flag.Lookup("h"), flag.Lookup("p")
 	if h == nil || p == nil {
 		t.Skip("no server flags")
@@ -485,7 +486,12 @@ func TestFastResultWriteRetrySkipsAnswered(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	defer clnt.Close()
+	t.Cleanup(clnt.Close)
+	return clnt
+}
+
+func TestFastResultWriteRetrySkipsAnswered(t *testing.T) {
+	clnt := fastTestServerClient(t)
 	node := clnt.Cluster().GetNodes()[0]
 
 	for _, write := range []bool{true, false} {
@@ -532,5 +538,113 @@ func TestFastResultResetClearsResults(t *testing.T) {
 	b.prepareResults()
 	if b.Found(0) || b.ResultCode(0) != types.NO_RESPONSE {
 		t.Fatal("result survived Reset")
+	}
+}
+
+func fastWriteResultBatch(t *testing.T, n int) (*FastBatch, []BatchRecordIfc) {
+	wp := fastTestWritePolicy()
+	fwp := NewFastWritePolicy(wp)
+	b := NewFastBatch("test", "sess")
+	var records []BatchRecordIfc
+	for i := range n {
+		b.AddWriteBlob([]byte{byte(i)}, fwp).AddInt("n", 1)
+		records = append(records, NewBatchWrite(wp, fastTestKey(t, []byte{byte(i)}), AddOp(NewBin("n", 1))))
+		records[i].BatchRec().prepare()
+	}
+	return b, records
+}
+
+func fastCutWriteMsg1() []byte {
+	return fastReplyMsg(
+		fastReplyRec{index: 0, ops: []fastReplyOp{opInt("rc", 6), opNull("n")}},
+		fastReplyRec{index: 1, code: types.OP_NOT_APPLICABLE},
+	)
+}
+
+func fastCutWriteReply() []byte {
+	return append(fastCutWriteMsg1(), fastReplyMsg(
+		fastReplyRec{index: 2, ops: []fastReplyOp{opBlob("big", make([]byte, 200)), opInt("rc", 7)}},
+		fastReplyRec{index: 3, ops: []fastReplyOp{opInt("rc", 8)}},
+		fastReplyLast(),
+	)...)
+}
+
+func TestFastResultCutStreamMatchesOfficial(t *testing.T) {
+	clnt, policy, node := fastTestClient(), fastTestBatchPolicy(), fastTestNode()
+
+	t.Run("write", func(t *testing.T) {
+		reply := fastCutWriteReply()
+		for n := 8; n < len(reply); n++ {
+			b, records := fastWriteResultBatch(t, 5)
+			offsets := seqOffsets(b.Len())
+			cmd, err := fastParse(b, clnt, policy, node, offsets, 2, reply[:n], 64)
+			ocmd, oerr := officialParseWrite(t, clnt, policy, node, records, offsets, 2, reply[:n])
+			if (err == nil) != (oerr == nil) {
+				t.Fatalf("cut %d: err = %v, official %v", n, err, oerr)
+			}
+			if err != nil {
+				cmd.setInDoubt(cmd)
+				ocmd.setInDoubt(ocmd)
+			}
+			for i, r := range records {
+				assertFastMatchesOfficial(t, b, r.BatchRec(), i, true)
+			}
+		}
+	})
+
+	t.Run("read", func(t *testing.T) {
+		reply := fastReadReply()
+		for n := 8; n < len(reply); n++ {
+			b, official := fastReadResultBatch()
+			records := official(t)
+			offsets := seqOffsets(b.Len())
+			_, err := fastParse(b, clnt, policy, node, offsets, 2, reply[:n], 64)
+			_, oerr := officialParseRead(t, clnt, policy, node, records, offsets, reply[:n])
+			if (err == nil) != (oerr == nil) {
+				t.Fatalf("cut %d: err = %v, official %v", n, err, oerr)
+			}
+			for i, r := range records {
+				assertFastMatchesOfficial(t, b, &r.BatchRecord, i, false)
+			}
+		}
+	})
+}
+
+func TestFastResultCutStreamRetryMatchesOfficial(t *testing.T) {
+	clnt := fastTestServerClient(t)
+	node := clnt.Cluster().GetNodes()[0]
+	policy := fastTestBatchPolicy()
+	reply := fastCutWriteReply()
+	cut := len(fastCutWriteMsg1()) + 8 + 22 + 8 + len("big") + 100
+
+	b, records := fastWriteResultBatch(t, 5)
+	offsets := seqOffsets(b.Len())
+	cmd, err := fastParse(b, clnt, policy, node, offsets, 2, reply[:cut], 64)
+	ocmd, oerr := officialParseWrite(t, clnt, policy, node, records, offsets, 2, reply[:cut])
+	if err == nil || oerr == nil {
+		t.Fatalf("cut stream parsed: err = %v, official %v", err, oerr)
+	}
+	cmd.setInDoubt(cmd)
+	ocmd.setInDoubt(ocmd)
+
+	nodes, gerr := cmd.generateBatchNodes(clnt.Cluster())
+	onodes, ogerr := ocmd.generateBatchNodes(clnt.Cluster())
+	if gerr != nil || ogerr != nil {
+		t.Fatalf("generateBatchNodes: %v, official %v", gerr, ogerr)
+	}
+	collect := func(bns []*batchNode) []int {
+		var got []int
+		for _, bn := range bns {
+			got = append(got, bn.offsets...)
+		}
+		slices.Sort(got)
+		return got
+	}
+	got, want := collect(nodes), collect(onodes)
+	if !slices.Equal(got, want) || !slices.Equal(want, []int{3, 4}) {
+		t.Fatalf("retried offsets %v, official %v, want [3 4]", got, want)
+	}
+	for i, r := range records {
+		assertFastMatchesOfficial(t, b, r.BatchRec(), i, true)
 	}
 }

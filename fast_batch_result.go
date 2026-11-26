@@ -10,6 +10,7 @@ import (
 type fastResult struct {
 	code    types.ResultCode
 	inDoubt bool
+	found   bool
 	node    *Node
 	ops     []byte
 }
@@ -29,14 +30,14 @@ func (b *FastBatch) ResultCode(i int) types.ResultCode { return b.results[i].cod
 
 func (b *FastBatch) InDoubt(i int) bool { return b.results[i].inDoubt }
 
-func (b *FastBatch) Found(i int) bool { return b.results[i].code == types.OK }
+func (b *FastBatch) Found(i int) bool { return b.results[i].found }
 
-// RecordErr is nil for OK, for NO_RESPONSE (as the official BatchRecord.Err)
-// and for KEY_NOT_FOUND_ERROR on reads.
+// RecordErr is nil for a found record, for NO_RESPONSE (as the official
+// BatchRecord.Err) and for KEY_NOT_FOUND_ERROR on reads.
 func (b *FastBatch) RecordErr(i int) Error {
 	r := &b.results[i]
 	switch {
-	case r.code == types.OK || r.code == types.NO_RESPONSE:
+	case r.found || r.code == types.NO_RESPONSE:
 		return nil
 	case r.code == types.KEY_NOT_FOUND_ERROR && b.entries[i].policy == nil:
 		return nil

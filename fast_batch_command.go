@@ -148,29 +148,35 @@ func (cmd *fastBatchCommand) parseRecordResults(ifc command, receiveSize int) (b
 			if lastMessage && receiveSize == int(_MSG_REMAINING_HEADER_SIZE) {
 				return false, newError(resultCode).setNode(cmd.node)
 			}
+			r.code, r.node = resultCode, cmd.node
+			r.inDoubt = cmd.batchInDoubt(write, cmd.commandSentCounter)
 			if resultCode == types.UDF_BAD_RESPONSE {
 				if err := cmd.readOps(opCount, r); err != nil {
 					return false, err
 				}
 			}
-			r.code, r.node = resultCode, cmd.node
-			r.inDoubt = cmd.batchInDoubt(write, cmd.commandSentCounter)
 			if lastMessage {
 				return false, nil
 			}
 			continue
 		}
 
+		// A record cut inside its ops still counts as answered, so it is
+		// neither in doubt nor retried, as in the official parsers.
+		r.code, r.node = types.OK, cmd.node
 		if err := cmd.readOps(opCount, r); err != nil {
+			r.inDoubt = cmd.batchInDoubt(write, cmd.commandSentCounter)
 			return false, err
 		}
-		r.code, r.node, r.inDoubt = types.OK, cmd.node, false
+		r.inDoubt, r.found = false, true
 	}
 	return true, nil
 }
 
 // readOps copies the record's ops into cmd.resp. Commands that run in parallel
-// each own their resp, so views are never shared across goroutines.
+// each own their resp, so views are never shared across goroutines. Name and
+// value are read separately, as the official parsers do, so a cut stream fails
+// at the same record.
 func (cmd *fastBatchCommand) readOps(opCount int, r *fastResult) Error {
 	start := len(cmd.resp)
 	for range opCount {
@@ -183,10 +189,12 @@ func (cmd *fastBatchCommand) readOps(opCount int, r *fastResult) Error {
 			return newError(types.PARSE_ERROR, fmt.Sprintf("FastBatch: op size %d too small for name size %d", opSize, nameSize)).setNode(cmd.node)
 		}
 		cmd.resp = append(cmd.resp, cmd.dataBuffer[:8]...)
-		if err := cmd.readBytes(opSize - 4); err != nil {
-			return err
+		for _, n := range [2]int{nameSize, opSize - 4 - nameSize} {
+			if err := cmd.readBytes(n); err != nil {
+				return err
+			}
+			cmd.resp = append(cmd.resp, cmd.dataBuffer[:n]...)
 		}
-		cmd.resp = append(cmd.resp, cmd.dataBuffer[:opSize-4]...)
 	}
 	r.ops = cmd.resp[start:len(cmd.resp):len(cmd.resp)]
 	return nil
