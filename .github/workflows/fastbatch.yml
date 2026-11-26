@@ -2,7 +2,7 @@ name: FastBatch
 
 on:
   push:
-    branches: [fast-batch]
+    branches: [fast-batch, v8]
   pull_request:
 
 permissions:
@@ -37,13 +37,13 @@ jobs:
       - name: Test FastBatch without -race
         run: |
           set -o pipefail
-          go test -count=1 -v -run 'TestFast|TestExpTemplate' . -args -h 127.0.0.1 -p 3000 -n test 2>&1 | tee fast.log
-          grep -q -- '--- PASS: TestFastBatchKeysZeroAlloc' fast.log
-          grep -q -- '--- PASS: TestFastOpsZeroAlloc' fast.log
-          grep -q -- '--- PASS: TestFastExpWriteZeroAlloc' fast.log
-          grep -q -- '--- PASS: TestFastCommandWriteBufferZeroAlloc' fast.log
-          grep -q -- '--- PASS: TestFastResultParseZeroAlloc' fast.log
-          grep -q -- '--- PASS: TestFastExecuteZeroAlloc' fast.log
-          grep -q -- '--- PASS: TestFastExecutePoolZeroAlloc' fast.log
+          go test -count=1 -v -run 'TestFast|TestExpTemplate|FuzzFastResultParse' . -args -h 127.0.0.1 -p 3000 -n test 2>&1 | tee fast.log
+          grep -q -- '^--- PASS: TestFastBatchKeysZeroAlloc ' fast.log
+          grep -q -- '^--- PASS: TestFastOpsZeroAlloc ' fast.log
+          grep -q -- '^--- PASS: TestFastExpWriteZeroAlloc ' fast.log
+          grep -q -- '^--- PASS: TestFastCommandWriteBufferZeroAlloc ' fast.log
+          grep -q -- '^--- PASS: TestFastResultParseZeroAlloc ' fast.log
+          grep -q -- '^--- PASS: TestFastExecuteZeroAlloc ' fast.log
+          grep -q -- '^--- PASS: TestFastExecutePoolZeroAlloc ' fast.log
       - name: Test FastBatch with -race
         run: go test -race -count=1 -v -run 'TestFast|TestExpTemplate' . -args -h 127.0.0.1 -p 3000 -n test
