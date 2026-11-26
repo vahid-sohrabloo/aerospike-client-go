@@ -64,7 +64,7 @@ func fastCmdBytes(t *testing.T, b *FastBatch, clnt *Client, policy *BatchPolicy,
 	cmd := b.cmdFor(&Node{})
 	cmd.client = clnt
 	cmd.policy = policy
-	cmd.offsets = append(cmd.offsets, offsets...)
+	cmd.batch.offsets = append(cmd.batch.offsets, offsets...)
 	cmd.dataBuffer = make([]byte, 16)
 	if err := cmd.writeBuffer(cmd); err != nil {
 		t.Fatal(err)
@@ -239,7 +239,7 @@ func TestFastCommandClone(t *testing.T) {
 	fillFastReads(b, cases, fastBinsFor(cases))
 	cmd := b.cmdFor(&Node{})
 	cmd.client, cmd.policy = clnt, policy
-	cmd.offsets = append(cmd.offsets, seqOffsets(len(cases))...)
+	cmd.batch.offsets = append(cmd.batch.offsets, seqOffsets(len(cases))...)
 
 	node := &Node{}
 	clone, ok := cmd.cloneBatchCommand(&batchNode{Node: node, offsets: []int{3, 5}}).(*fastBatchCommand)
@@ -254,8 +254,8 @@ func TestFastCommandClone(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertFastBytes(t, "clone", officialReadBytes(t, clnt, policy, cases, []int{3, 5}), wireBytes(clone.dataBuffer, clone.dataOffset))
-	if len(cmd.offsets) != len(cases) {
-		t.Fatalf("parent offsets changed: %v", cmd.offsets)
+	if len(cmd.batch.offsets) != len(cases) {
+		t.Fatalf("parent offsets changed: %v", cmd.batch.offsets)
 	}
 }
 
@@ -264,7 +264,7 @@ func TestFastCommandCmdForResets(t *testing.T) {
 	b.AddReadString("eid:a", NewFastBins("eids"))
 	n1, n2 := &Node{}, &Node{}
 	c1 := b.cmdFor(n1)
-	c1.offsets = append(c1.offsets, 0)
+	c1.batch.offsets = append(c1.batch.offsets, 0)
 	c1.commandSentCounter = 3
 	c1.splitRetry = true
 	c1.filteredOutCnt = 2
@@ -278,7 +278,7 @@ func TestFastCommandCmdForResets(t *testing.T) {
 	if c != c1 {
 		t.Fatal("command slot not reused after Reset")
 	}
-	if c.node != n2 || c.batch.Node != n2 || c.fb != b || len(c.offsets) != 0 ||
+	if c.node != n2 || c.batch.Node != n2 || c.fb != b || len(c.batch.offsets) != 0 ||
 		c.commandSentCounter != 0 || c.splitRetry || c.filteredOutCnt != 0 || !c.isOperation {
 		t.Fatalf("command not reset: %+v", c)
 	}
@@ -290,18 +290,10 @@ func TestFastCommandRejectsMixed(t *testing.T) {
 	b.AddWriteBlob([]byte{2}, NewFastWritePolicy(fastTestWritePolicy())).AddInt("rc", 1)
 	cmd := b.cmdFor(&Node{})
 	cmd.client, cmd.policy = fastTestClient(), fastTestBatchPolicy()
-	cmd.offsets = append(cmd.offsets, 0, 1)
+	cmd.batch.offsets = append(cmd.batch.offsets, 0, 1)
 	cmd.dataBuffer = make([]byte, 16)
 	err := cmd.writeBuffer(cmd)
 	if err == nil || !err.Matches(types.PARAMETER_ERROR) {
 		t.Fatalf("err = %v, want PARAMETER_ERROR", err)
-	}
-}
-
-func TestFastCommandParseNotImplemented(t *testing.T) {
-	b := NewFastBatch("test", "sess")
-	cmd := b.cmdFor(&Node{})
-	if _, err := cmd.parseRecordResults(cmd, 0); err == nil || !err.Matches(types.PARSE_ERROR) {
-		t.Fatalf("err = %v, want PARSE_ERROR", err)
 	}
 }

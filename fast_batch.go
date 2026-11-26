@@ -13,6 +13,7 @@ type FastBatch struct {
 	opBuf     []byte
 	cur       FastWrite
 	cmds      []*fastBatchCommand
+	results   []fastResult
 	nCmds     int
 }
 
@@ -25,6 +26,7 @@ func (b *FastBatch) Reset() {
 	b.entries = b.entries[:0]
 	b.opBuf = b.opBuf[:0]
 	b.nCmds = 0
+	b.results = b.results[:0]
 }
 
 func (b *FastBatch) Len() int {

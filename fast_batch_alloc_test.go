@@ -124,7 +124,7 @@ func TestFastCommandWriteBufferZeroAlloc(t *testing.T) {
 			cmd := b.cmdFor(node)
 			cmd.client, cmd.policy = clnt, policy
 			for i := range b.Len() {
-				cmd.offsets = append(cmd.offsets, i)
+				cmd.batch.offsets = append(cmd.batch.offsets, i)
 			}
 			cmd.dataBuffer = buf
 			if err := cmd.writeBuffer(cmd); err != nil {
@@ -136,5 +136,73 @@ func TestFastCommandWriteBufferZeroAlloc(t *testing.T) {
 		if allocs := testing.AllocsPerRun(100, run); allocs != 0 {
 			t.Fatalf("allocs = %v, want 0", allocs)
 		}
+	}
+}
+
+func TestFastResultParseZeroAlloc(t *testing.T) {
+	clnt, policy, node := fastTestClient(), fastTestBatchPolicy(), fastTestNode()
+	b, _ := fastReadResultBatch()
+	reply := fastReadReply()
+	conn := fastTestConn(reply, 1<<12)
+	fc := conn.conn.(*fastFakeConn)
+	sum := int64(0)
+	run := func() {
+		fc.r.Reset(reply)
+		b.nCmds = 0
+		b.prepareResults()
+		cmd := b.cmdFor(node)
+		cmd.client, cmd.policy = clnt, policy
+		for i := range b.Len() {
+			cmd.batch.offsets = append(cmd.batch.offsets, i)
+		}
+		cmd.conn = conn
+		if err := cmd.parseResult(cmd, conn); err != nil {
+			t.Fatal(err)
+		}
+		for i := range b.Len() {
+			if !b.Found(i) {
+				continue
+			}
+			for _, name := range fastFuzzBinNames {
+				v, ok := b.Bin(i, name)
+				if !ok {
+					continue
+				}
+				if n, ok := v.Int(); ok {
+					sum += n
+				}
+				if p, ok := v.Bytes(); ok {
+					sum += int64(len(p))
+				}
+				if it, ok := v.Map(); ok {
+					for {
+						_, e, ok := it.Next()
+						if !ok {
+							break
+						}
+						if l, ok := e.List(); ok {
+							for {
+								x, ok := l.Next()
+								if !ok {
+									break
+								}
+								n, _ := x.Int()
+								sum += n
+							}
+						} else {
+							n, _ := e.Int()
+							sum += n
+						}
+					}
+				}
+			}
+		}
+	}
+	run()
+	if allocs := testing.AllocsPerRun(100, run); allocs != 0 {
+		t.Fatalf("allocs = %v, want 0", allocs)
+	}
+	if sum == 0 {
+		t.Fatal("no values read")
 	}
 }

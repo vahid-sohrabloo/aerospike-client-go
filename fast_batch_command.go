@@ -1,13 +1,16 @@
 package aerospike
 
 import (
+	"fmt"
+
 	"github.com/aerospike/aerospike-client-go/v8/types"
+	Buffer "github.com/aerospike/aerospike-client-go/v8/utils/buffer"
 )
 
 type fastBatchCommand struct {
 	batchCommand
-	fb      *FastBatch
-	offsets []int
+	fb   *FastBatch
+	resp []byte
 }
 
 // cmdFor returns a command slot kept in b. Slots are handed out in order and
@@ -20,8 +23,8 @@ func (b *FastBatch) cmdFor(node *Node) *fastBatchCommand {
 	b.nCmds++
 
 	bn := c.batch
-	*c = fastBatchCommand{fb: b, offsets: c.offsets[:0]}
-	*bn = batchNode{Node: node}
+	*c = fastBatchCommand{fb: b, resp: c.resp[:0]}
+	*bn = batchNode{Node: node, offsets: bn.offsets[:0]}
 	c.batch = bn
 	c.node = node
 	c.isOperation = true
@@ -65,7 +68,7 @@ func (cmd *fastBatchCommand) writeBuffer(ifc command) Error {
 		len(b.namespace) + int(_FIELD_HEADER_SIZE) + len(b.set) + int(_FIELD_HEADER_SIZE)
 	cmd.begin()
 	cmd.dataOffset += int(_FIELD_HEADER_SIZE) + 5
-	for _, i := range cmd.offsets {
+	for _, i := range cmd.batch.offsets {
 		e := &b.entries[i]
 		cmd.dataOffset += recordHeader
 		if write {
@@ -85,10 +88,10 @@ func (cmd *fastBatchCommand) writeBuffer(ifc command) Error {
 	cmd.writeBatchHeader(policy, 1)
 	fieldSizeOffset := cmd.dataOffset
 	cmd.writeFieldHeader(0, BATCH_INDEX)
-	cmd.WriteUint32(uint32(len(cmd.offsets)))
+	cmd.WriteUint32(uint32(len(cmd.batch.offsets)))
 	cmd.WriteByte(cmd.getBatchFlags(policy))
 
-	for _, i := range cmd.offsets {
+	for _, i := range cmd.batch.offsets {
 		e := &b.entries[i]
 		key := &b.keys[i]
 		cmd.WriteUint32(uint32(i))
@@ -109,7 +112,95 @@ func (cmd *fastBatchCommand) writeBuffer(ifc command) Error {
 }
 
 func (cmd *fastBatchCommand) parseRecordResults(ifc command, receiveSize int) (bool, Error) {
-	return false, newError(types.PARSE_ERROR, "FastBatch reply parsing is not implemented")
+	results := cmd.fb.results
+	write := !cmd.isRead()
+	cmd.dataOffset = 0
+	for cmd.dataOffset < receiveSize {
+		if err := cmd.readBytes(int(_MSG_REMAINING_HEADER_SIZE)); err != nil {
+			return false, err
+		}
+		resultCode := types.ResultCode(cmd.dataBuffer[5] & 0xFF)
+		info3 := int(cmd.dataBuffer[3])
+		lastMessage := info3&_INFO3_LAST == _INFO3_LAST
+		if resultCode == 0 && lastMessage {
+			return false, nil
+		}
+
+		batchIndex := int(Buffer.BytesToUint32(cmd.dataBuffer, 14))
+		fieldCount := int(Buffer.BytesToUint16(cmd.dataBuffer, 18))
+		opCount := int(Buffer.BytesToUint16(cmd.dataBuffer, 20))
+		if batchIndex < 0 || batchIndex >= len(results) {
+			return false, newError(types.PARSE_ERROR, fmt.Sprintf("FastBatch: batch index %d out of range", batchIndex)).setNode(cmd.node)
+		}
+		if err := cmd.skipKey(fieldCount); err != nil {
+			return false, err
+		}
+
+		if (!write || resultCode == 0) && cmd.node.cluster.metricsEnabled.Load() {
+			cmd.node.stats.updateOrInsert(cmd.getNamespace(), cmd.getNamespaces(), cmd.commandType(), resultCode)
+		}
+
+		r := &results[batchIndex]
+		if resultCode != 0 {
+			if resultCode == types.FILTERED_OUT {
+				cmd.filteredOutCnt++
+			}
+			if lastMessage && receiveSize == int(_MSG_REMAINING_HEADER_SIZE) {
+				return false, newError(resultCode).setNode(cmd.node)
+			}
+			if resultCode == types.UDF_BAD_RESPONSE {
+				if err := cmd.readOps(opCount, r); err != nil {
+					return false, err
+				}
+			}
+			r.code, r.node = resultCode, cmd.node
+			r.inDoubt = cmd.batchInDoubt(write, cmd.commandSentCounter)
+			if lastMessage {
+				return false, nil
+			}
+			continue
+		}
+
+		if err := cmd.readOps(opCount, r); err != nil {
+			return false, err
+		}
+		r.code, r.node, r.inDoubt = types.OK, cmd.node, false
+	}
+	return true, nil
+}
+
+// readOps copies the record's ops into cmd.resp. Commands that run in parallel
+// each own their resp, so views are never shared across goroutines.
+func (cmd *fastBatchCommand) readOps(opCount int, r *fastResult) Error {
+	start := len(cmd.resp)
+	for range opCount {
+		if err := cmd.readBytes(8); err != nil {
+			return err
+		}
+		opSize := int(Buffer.BytesToUint32(cmd.dataBuffer, 0))
+		nameSize := int(cmd.dataBuffer[7])
+		if opSize < 4+nameSize {
+			return newError(types.PARSE_ERROR, fmt.Sprintf("FastBatch: op size %d too small for name size %d", opSize, nameSize)).setNode(cmd.node)
+		}
+		cmd.resp = append(cmd.resp, cmd.dataBuffer[:8]...)
+		if err := cmd.readBytes(opSize - 4); err != nil {
+			return err
+		}
+		cmd.resp = append(cmd.resp, cmd.dataBuffer[:opSize-4]...)
+	}
+	r.ops = cmd.resp[start:len(cmd.resp):len(cmd.resp)]
+	return nil
+}
+
+func (cmd *fastBatchCommand) inDoubt() {
+	if cmd.isRead() {
+		return
+	}
+	for _, i := range cmd.batch.offsets {
+		if r := &cmd.fb.results[i]; r.code == types.NO_RESPONSE {
+			r.inDoubt = true
+		}
+	}
 }
 
 func (cmd *fastBatchCommand) isRead() bool {
@@ -139,7 +230,7 @@ func (cmd *fastBatchCommand) cloneBatchCommand(batch *batchNode) batcher {
 	res := *cmd
 	res.node = batch.Node
 	res.batch = batch
-	res.offsets = batch.offsets
+	res.resp = nil
 	return &res
 }
 
@@ -152,7 +243,10 @@ func (cmd *fastBatchCommand) generateBatchNodes(cluster *Cluster) ([]*batchNode,
 	write := !cmd.isRead()
 
 	var batchNodes []*batchNode
-	for _, offset := range cmd.offsets {
+	for _, offset := range cmd.batch.offsets {
+		if write && cmd.fb.results[offset].code != types.NO_RESPONSE {
+			continue
+		}
 		key := &cmd.fb.keys[offset]
 		var node *Node
 		var err Error
@@ -165,7 +259,7 @@ func (cmd *fastBatchCommand) generateBatchNodes(cluster *Cluster) ([]*batchNode,
 			return nil, err
 		}
 		if bn := findBatchNode(batchNodes, node); bn == nil {
-			batchNodes = append(batchNodes, newBatchNode(node, len(cmd.offsets), offset))
+			batchNodes = append(batchNodes, newBatchNode(node, len(cmd.batch.offsets), offset))
 		} else {
 			bn.AddKey(offset)
 		}
