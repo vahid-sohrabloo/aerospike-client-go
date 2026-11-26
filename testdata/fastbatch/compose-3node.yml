@@ -1,7 +1,9 @@
-# 3-node Aerospike cluster for TestFastExecuteMultiNodeZeroAlloc.
+# 3-node Aerospike cluster for the FASTBATCH_3NODE-gated tests.
 #   docker compose -f testdata/fastbatch/compose-3node.yml up -d
-#   FASTBATCH_3NODE=127.0.0.1:3100 go test -count=1 -run TestFastExecuteMultiNodeZeroAlloc . -args -h 127.0.0.1 -p 3000 -n test
+#   FASTBATCH_3NODE=127.0.0.1:3100 go test -count=1 -run TestFast . -args -h 127.0.0.1 -p 3000 -n test
 #   docker compose -f testdata/fastbatch/compose-3node.yml down
+# TestFastNodeDownParity stops as3 and recreates the whole cluster when done,
+# so it needs the docker CLI.
 # Keep -h/-p on a separate single node: the suite's own client tends that one,
 # and a tend of this cluster would show up in AllocsPerRun.
 name: fastbatch-3node
@@ -41,7 +43,7 @@ configs:
     content: |
       service {
         cluster-name fastbatch
-        proto-fd-max 1024
+        proto-fd-max 15000
       }
       logging {
         console {
@@ -81,7 +83,7 @@ configs:
     content: |
       service {
         cluster-name fastbatch
-        proto-fd-max 1024
+        proto-fd-max 15000
       }
       logging {
         console {
@@ -121,7 +123,7 @@ configs:
     content: |
       service {
         cluster-name fastbatch
-        proto-fd-max 1024
+        proto-fd-max 15000
       }
       logging {
         console {

@@ -371,6 +371,7 @@ func TestFastExecuteNoStraggler(t *testing.T) {
 	}
 	fill(0)
 	round := 0
+	spilled := clnt.fastPool().spilled.Load()
 	for _, concurrent := range []int{0, 1} {
 		policy := NewBatchPolicy()
 		policy.ConcurrentNodes = concurrent
@@ -408,6 +409,9 @@ func TestFastExecuteNoStraggler(t *testing.T) {
 			}()
 			<-done
 		}
+	}
+	if clnt.fastPool().spilled.Load() == spilled {
+		t.Fatal("no node ran on a plain goroutine")
 	}
 }
 

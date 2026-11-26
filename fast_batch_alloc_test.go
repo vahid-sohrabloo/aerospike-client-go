@@ -305,3 +305,45 @@ func TestFastExecuteMultiNodeZeroAlloc(t *testing.T) {
 		}
 	}
 }
+
+// TestFastExecutePoolZeroAlloc runs three commands on one node, so two of
+// them go through the pool on a single-node server too.
+func TestFastExecutePoolZeroAlloc(t *testing.T) {
+	cp := NewClientPolicy()
+	cp.TendInterval = time.Hour
+	clnt := fastServerClientPolicy(t, cp)
+	putFastInts(t, clnt, 'q', 3)
+	node := clnt.GetNodes()[0]
+	policy := NewBatchPolicy()
+	policy.ConcurrentNodes = 0
+	bins := NewFastBins("n")
+	b := NewFastBatch(fastNS(), fastExecSet)
+	for i := range 3 {
+		b.AddReadBlob(fastBlobKey('q', i), bins)
+	}
+	run := func() {
+		b.beginExecute()
+		for i := range 3 {
+			cmd := b.cmdFor(node)
+			cmd.client, cmd.policy = clnt, policy
+			cmd.batch.offsets = append(cmd.batch.offsets, i)
+		}
+		if err := clnt.runFast(policy, b); err != nil {
+			t.Fatal(err)
+		}
+		for i := range 3 {
+			if err := checkFastInt(b, i, int64(i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for range 100 {
+		run()
+	}
+	if allocs := testing.AllocsPerRun(200, run); allocs != 0 {
+		t.Fatalf("allocs = %v, want 0", allocs)
+	}
+	if clnt.fastPool().workers.Load() == 0 {
+		t.Fatal("no pool worker ran a node")
+	}
+}

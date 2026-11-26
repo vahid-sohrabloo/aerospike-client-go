@@ -125,6 +125,18 @@ jobs:
       - name: Build for Google App Engine (unsafe package removed)
         env: { GOPROXY: off, GOSUMDB: off, GOFLAGS: -mod=vendor }
         run: go run -mod=vendor github.com/onsi/ginkgo/v2/ginkgo build -tags="app_engine" .
+      - name: Test FastBatch without -race
+        env: { GOPROXY: off, GOSUMDB: off, GOFLAGS: -mod=vendor }
+        run: |
+          set -o pipefail
+          go test -run 'TestFast|TestExpTemplate' -count=1 -v . -args -h 127.0.0.1 -p 3000 -n test | tee fast.log
+          grep -q -- '--- PASS: TestFastBatchKeysZeroAlloc' fast.log
+          grep -q -- '--- PASS: TestFastOpsZeroAlloc' fast.log
+          grep -q -- '--- PASS: TestFastExpWriteZeroAlloc' fast.log
+          grep -q -- '--- PASS: TestFastCommandWriteBufferZeroAlloc' fast.log
+          grep -q -- '--- PASS: TestFastResultParseZeroAlloc' fast.log
+          grep -q -- '--- PASS: TestFastExecuteZeroAlloc' fast.log
+          grep -q -- '--- PASS: TestFastExecutePoolZeroAlloc' fast.log
       - name: Run the tests
         env: { GOPROXY: off, GOSUMDB: off, GOFLAGS: -mod=vendor }
         run: go run -mod=vendor github.com/onsi/ginkgo/v2/ginkgo -output-dir=./ -coverprofile=covprofile_native.out -covermode=atomic -coverpkg=./... -race -keep-going -succinct -randomize-suites -skip="HyperLogLog"

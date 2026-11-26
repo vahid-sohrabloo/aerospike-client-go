@@ -18,6 +18,7 @@ type fastExec struct {
 	done    chan struct{}
 	workers atomic.Int32
 	max     int32
+	spilled atomic.Int64
 }
 
 func (clnt *Client) fastPool() *fastExec {
@@ -46,6 +47,7 @@ func (p *fastExec) submit(cmd *fastBatchCommand) {
 		return
 	}
 	p.workers.Add(-1)
+	p.spilled.Add(1)
 	go runNode(cmd)
 }
 
