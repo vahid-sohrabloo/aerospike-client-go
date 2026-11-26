@@ -59,3 +59,37 @@ func TestFastOpsZeroAlloc(t *testing.T) {
 		t.Fatalf("opCount = %d, want %d", got, 16*7+7)
 	}
 }
+
+func TestFastExpWriteZeroAlloc(t *testing.T) {
+	b := NewFastBatch("test", "sess")
+	wp := NewFastWritePolicy(NewBatchWritePolicy())
+	key := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	shapes := expTestShapes()
+	tmpls := make([]*ExpTemplate, len(shapes))
+	for i, s := range shapes {
+		tmpl, err := CompileExpTemplate(s.build(ExpParam(0)), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmpls[i] = tmpl
+	}
+	params := []int64{0}
+	run := func() {
+		b.Reset()
+		w := b.AddWriteBlob(key, wp)
+		for k := range int64(16) {
+			params[0] = k<<28 | 0xabcdef
+			for i, s := range shapes {
+				w.ExpWrite(s.bin, tmpls[i], s.flags, params)
+			}
+		}
+	}
+	run()
+	allocs := testing.AllocsPerRun(100, run)
+	if allocs != 0 {
+		t.Fatalf("allocs = %v, want 0", allocs)
+	}
+	if got := b.entries[0].opCount; got != 16*len(shapes) {
+		t.Fatalf("opCount = %d, want %d", got, 16*len(shapes))
+	}
+}
