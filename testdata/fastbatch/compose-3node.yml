@@ -1,0 +1,158 @@
+# 3-node Aerospike cluster for TestFastExecuteMultiNodeZeroAlloc.
+#   docker compose -f testdata/fastbatch/compose-3node.yml up -d
+#   FASTBATCH_3NODE=127.0.0.1:3100 go test -count=1 -run TestFastExecuteMultiNodeZeroAlloc . -args -h 127.0.0.1 -p 3000 -n test
+#   docker compose -f testdata/fastbatch/compose-3node.yml down
+# Keep -h/-p on a separate single node: the suite's own client tends that one,
+# and a tend of this cluster would show up in AllocsPerRun.
+name: fastbatch-3node
+
+x-node: &node
+  image: aerospike/aerospike-server:8.0
+  network_mode: host
+  cpus: 1
+  mem_limit: 512m
+  ulimits:
+    nofile:
+      soft: 65536
+      hard: 65536
+
+services:
+  as1:
+    <<: *node
+    command: ["--config-file", "/etc/aerospike/fast.conf"]
+    configs:
+      - source: as1
+        target: /etc/aerospike/fast.conf
+  as2:
+    <<: *node
+    command: ["--config-file", "/etc/aerospike/fast.conf"]
+    configs:
+      - source: as2
+        target: /etc/aerospike/fast.conf
+  as3:
+    <<: *node
+    command: ["--config-file", "/etc/aerospike/fast.conf"]
+    configs:
+      - source: as3
+        target: /etc/aerospike/fast.conf
+
+configs:
+  as1:
+    content: |
+      service {
+        cluster-name fastbatch
+        proto-fd-max 1024
+      }
+      logging {
+        console {
+          context any warning
+        }
+      }
+      network {
+        service {
+          address any
+          access-address 127.0.0.1
+          port 3100
+        }
+        heartbeat {
+          mode mesh
+          address 127.0.0.1
+          port 3102
+          mesh-seed-address-port 127.0.0.1 3102
+          mesh-seed-address-port 127.0.0.1 3112
+          mesh-seed-address-port 127.0.0.1 3122
+          interval 150
+          timeout 10
+        }
+        fabric {
+          address 127.0.0.1
+          port 3101
+        }
+      }
+      namespace test {
+        replication-factor 2
+        stop-writes-sys-memory-pct 100
+        storage-engine memory {
+          data-size 256M
+        }
+      }
+
+  as2:
+    content: |
+      service {
+        cluster-name fastbatch
+        proto-fd-max 1024
+      }
+      logging {
+        console {
+          context any warning
+        }
+      }
+      network {
+        service {
+          address any
+          access-address 127.0.0.1
+          port 3110
+        }
+        heartbeat {
+          mode mesh
+          address 127.0.0.1
+          port 3112
+          mesh-seed-address-port 127.0.0.1 3102
+          mesh-seed-address-port 127.0.0.1 3112
+          mesh-seed-address-port 127.0.0.1 3122
+          interval 150
+          timeout 10
+        }
+        fabric {
+          address 127.0.0.1
+          port 3111
+        }
+      }
+      namespace test {
+        replication-factor 2
+        stop-writes-sys-memory-pct 100
+        storage-engine memory {
+          data-size 256M
+        }
+      }
+
+  as3:
+    content: |
+      service {
+        cluster-name fastbatch
+        proto-fd-max 1024
+      }
+      logging {
+        console {
+          context any warning
+        }
+      }
+      network {
+        service {
+          address any
+          access-address 127.0.0.1
+          port 3120
+        }
+        heartbeat {
+          mode mesh
+          address 127.0.0.1
+          port 3122
+          mesh-seed-address-port 127.0.0.1 3102
+          mesh-seed-address-port 127.0.0.1 3112
+          mesh-seed-address-port 127.0.0.1 3122
+          interval 150
+          timeout 10
+        }
+        fabric {
+          address 127.0.0.1
+          port 3121
+        }
+      }
+      namespace test {
+        replication-factor 2
+        stop-writes-sys-memory-pct 100
+        storage-engine memory {
+          data-size 256M
+        }
+      }

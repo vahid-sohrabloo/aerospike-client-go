@@ -1,6 +1,8 @@
 package aerospike
 
 import (
+	"sync"
+
 	"github.com/aerospike/aerospike-client-go/v8/types/particle_type"
 )
 
@@ -15,6 +17,12 @@ type FastBatch struct {
 	cmds      []*fastBatchCommand
 	results   []fastResult
 	nCmds     int
+
+	wg     sync.WaitGroup
+	errMu  sync.Mutex
+	errs   Error
+	sem    chan struct{}
+	semBuf chan struct{}
 }
 
 func NewFastBatch(namespace, set string) *FastBatch {

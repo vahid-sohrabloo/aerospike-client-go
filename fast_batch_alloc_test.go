@@ -2,7 +2,13 @@
 
 package aerospike
 
-import "testing"
+import (
+	"os"
+	"testing"
+	"time"
+
+	"github.com/aerospike/aerospike-client-go/v8/types"
+)
 
 func TestFastBatchKeysZeroAlloc(t *testing.T) {
 	b := NewFastBatch("test", "sess")
@@ -204,5 +210,98 @@ func TestFastResultParseZeroAlloc(t *testing.T) {
 	}
 	if sum == 0 {
 		t.Fatal("no values read")
+	}
+}
+
+// fastExecAllocBatches returns a write batch of nWrites records and a read
+// batch of nReads blob plus nReads string keys.
+func fastExecAllocBatches(tag byte, nReads, nWrites int) (fill func(), batches []*FastBatch) {
+	mp := NewMapPolicy(MapOrder.UNORDERED, MapWriteMode.UPDATE)
+	lp := DefaultListPolicy()
+	wp := NewFastWritePolicy(NewBatchWritePolicy())
+	mapBins, eidBins := NewFastBins(fastMapReadBins...), NewFastBins(fastEIDReadBins...)
+	rb, wb := NewFastBatch(fastNS(), fastExecSet), NewFastBatch(fastNS(), fastExecSet)
+	blobs := make([][]byte, max(nReads, nWrites))
+	strs := make([]string, nReads)
+	for i := range blobs {
+		blobs[i] = fastBlobKey(tag, i)
+	}
+	for i := range strs {
+		strs[i] = fastStringKey(tag, i)
+	}
+	fill = func() {
+		rb.Reset()
+		wb.Reset()
+		for i := range nReads {
+			rb.AddReadBlob(blobs[i], mapBins)
+			rb.AddReadString(strs[i], eidBins)
+		}
+		for i := range nWrites {
+			w := wb.AddWriteBlob(blobs[i], wp)
+			w.MapIncrementInt("bc", mp, 7, 1)
+			w.ListAppendIntInMapKey("la", lp, 7, MapOrder.UNORDERED, 2)
+			w.ListTrimInMapKey("la", 7, MapOrder.UNORDERED, -4, 4)
+			w.AddInt("n", 1)
+		}
+	}
+	return fill, []*FastBatch{wb, rb}
+}
+
+func assertFastExecZeroAlloc(t *testing.T, clnt *Client, fill func(), b *FastBatch) {
+	t.Helper()
+	policy := NewBatchPolicy()
+	policy.ConcurrentNodes = 0
+	run := func() {
+		fill()
+		if err := clnt.ExecuteFast(policy, b); err != nil {
+			t.Fatal(err)
+		}
+		for i := range b.Len() {
+			if rc := b.ResultCode(i); rc != types.OK && rc != types.KEY_NOT_FOUND_ERROR {
+				t.Fatalf("record %d: %v", i, rc)
+			}
+		}
+	}
+	for range 100 {
+		run()
+	}
+	if allocs := testing.AllocsPerRun(200, run); allocs != 0 {
+		t.Fatalf("allocs = %v, want 0", allocs)
+	}
+}
+
+func TestFastExecuteZeroAlloc(t *testing.T) {
+	clnt := fastServerClient(t)
+	fill, batches := fastExecAllocBatches('z', 4, 4)
+	for _, b := range batches {
+		assertFastExecZeroAlloc(t, clnt, fill, b)
+	}
+}
+
+func TestFastExecuteMultiNodeZeroAlloc(t *testing.T) {
+	if os.Getenv("FASTBATCH_3NODE") == "" {
+		t.Skip("FASTBATCH_3NODE is unset; see testdata/fastbatch/compose-3node.yml")
+	}
+	// AllocsPerRun counts every goroutine, and a tend of three nodes
+	// allocates, so the client tends only at connect.
+	cp := NewClientPolicy()
+	cp.TendInterval = time.Hour
+	clnt := fastServerClientPolicy(t, cp)
+	if n := len(clnt.GetNodes()); n < 3 {
+		t.Fatalf("cluster has %d nodes, want 3", n)
+	}
+	fill, batches := fastExecAllocBatches('m', 32, 64)
+	for _, b := range batches {
+		assertFastExecZeroAlloc(t, clnt, fill, b)
+		if b.Len() != 64 {
+			t.Fatalf("batch has %d keys, want 64", b.Len())
+		}
+		nodes := map[*Node]bool{}
+		for i := range b.Len() {
+			nodes[b.results[i].node] = true
+		}
+		if len(nodes) < 2 || b.nCmds < 2 {
+			t.Fatalf("batch used %d nodes (%d commands), want more than one", len(nodes), b.nCmds)
+		}
 	}
 }
