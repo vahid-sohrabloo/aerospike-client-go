@@ -252,6 +252,26 @@ func TestFastSingleKeyAbortParity(t *testing.T) {
 	}
 }
 
+// OnLockingOnly sets info4 without a transaction, which FastBatch does not
+// encode.
+func TestFastRejectsTxnAttr(t *testing.T) {
+	clnt := fastServerClient(t)
+	putFastInts(t, clnt, 'l', 4)
+	locking := NewBatchWritePolicy()
+	locking.OnLockingOnly = true
+	p := fastWritePair(t, 'l', 3)
+	p.addWrite(t, fastBlobKey('l', 3), locking, 1)
+	err := clnt.ExecuteFast(nil, p.b)
+	if err == nil || !err.Matches(types.PARAMETER_ERROR) {
+		t.Fatalf("err = %v, want PARAMETER_ERROR", err)
+	}
+	for i := range p.b.Len() {
+		if rc := p.b.ResultCode(i); rc != types.NO_RESPONSE || p.b.InDoubt(i) {
+			t.Fatalf("record %d: code %v inDoubt %v", i, rc, p.b.InDoubt(i))
+		}
+	}
+}
+
 // cutProxy forwards each connection to target and closes it after cut reply
 // bytes.
 type cutProxy struct {

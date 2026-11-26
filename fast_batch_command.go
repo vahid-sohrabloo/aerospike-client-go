@@ -60,6 +60,9 @@ func (clnt *Client) checkFast(policy *BatchPolicy, b *FastBatch, write bool) Err
 		if p := b.entries[i].policy; p != nil && p.attr.filterExp != nil {
 			return newError(types.PARAMETER_ERROR, "FastBatch does not support filter expressions")
 		}
+		if p := b.entries[i].policy; p != nil && p.attr.txnAttr != 0 {
+			return newError(types.PARAMETER_ERROR, "FastBatch does not support transaction attributes")
+		}
 	}
 	return nil
 }
