@@ -44,12 +44,26 @@ func (b *FastBatch) hasWrite() (bool, Error) {
 	return write, nil
 }
 
+// checkFast rejects what FastBatch does not encode, before any command is
+// sent, so no record is left in doubt.
+func (clnt *Client) checkFast(policy *BatchPolicy, b *FastBatch, write bool) Error {
+	if policy.Txn != nil {
+		return newError(types.PARAMETER_ERROR, "FastBatch does not support transactions")
+	}
+	if policy.FilterExpression != nil || !write && clnt.getUsableBatchReadPolicy(nil).FilterExpression != nil {
+		return newError(types.PARAMETER_ERROR, "FastBatch does not support filter expressions")
+	}
+	for i := range b.entries {
+		if p := b.entries[i].policy; p != nil && p.attr.filterExp != nil {
+			return newError(types.PARAMETER_ERROR, "FastBatch does not support filter expressions")
+		}
+	}
+	return nil
+}
+
 func (cmd *fastBatchCommand) writeBuffer(ifc command) Error {
 	b := cmd.fb
 	policy := cmd.policy
-	if policy.Txn != nil || policy.FilterExpression != nil {
-		return newError(types.PARAMETER_ERROR, "FastBatch does not support transactions or filter expressions")
-	}
 	write, err := b.hasWrite()
 	if err != nil {
 		return err
@@ -57,11 +71,7 @@ func (cmd *fastBatchCommand) writeBuffer(ifc command) Error {
 
 	var readAttr batchAttr
 	if !write {
-		rp := cmd.client.getUsableBatchReadPolicy(nil)
-		if rp.FilterExpression != nil {
-			return newError(types.PARAMETER_ERROR, "FastBatch does not support filter expressions")
-		}
-		readAttr.setBatchRead(rp)
+		readAttr.setBatchRead(cmd.client.getUsableBatchReadPolicy(nil))
 	}
 
 	recordHeader := 4 + len(b.keys[0].digest) + 12 +
@@ -72,9 +82,6 @@ func (cmd *fastBatchCommand) writeBuffer(ifc command) Error {
 		e := &b.entries[i]
 		cmd.dataOffset += recordHeader
 		if write {
-			if e.policy.attr.filterExp != nil {
-				return newError(types.PARAMETER_ERROR, "FastBatch does not support filter expressions")
-			}
 			cmd.dataOffset += 2 + e.opLen
 		} else {
 			cmd.dataOffset += len(e.bins.enc)

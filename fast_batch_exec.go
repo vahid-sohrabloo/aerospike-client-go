@@ -91,6 +91,9 @@ func (clnt *Client) ExecuteFast(policy *BatchPolicy, b *FastBatch) Error {
 	if err != nil {
 		return err
 	}
+	if err := clnt.checkFast(policy, b, write); err != nil {
+		return err
+	}
 	if err := clnt.routeFast(policy, b, write); err != nil {
 		return err
 	}
