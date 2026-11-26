@@ -43,6 +43,7 @@ var AEROSPIKE_CLIENT_CONFIG_URL = os.Getenv("AEROSPIKE_CLIENT_CONFIG_URL")
 // All database operations are available against this object.
 type Client struct {
 	cluster *Cluster
+	fast    fastExec
 
 	// Dynamic configuration
 	dynConfig *DynConfig
@@ -391,6 +392,7 @@ func (clnt *Client) SetDefaultTxnRollPolicy(policy *TxnRollPolicy) {
 
 // Close closes all client connections to database server nodes.
 func (clnt *Client) Close() {
+	clnt.stopFastPool()
 	clnt.cluster.Close()
 	clnt.dynConfig.Close()
 }

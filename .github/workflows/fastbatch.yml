@@ -1,0 +1,49 @@
+name: FastBatch
+
+on:
+  push:
+    branches: [fast-batch, v8]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  fastbatch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      aerospike:
+        image: aerospike/aerospike-server:8.0
+        ports:
+          - 3000:3000
+        options: --ulimit nofile=65536:65536
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Wait for Aerospike
+        run: |
+          for i in $(seq 1 60); do
+            if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/3000' 2>/dev/null; then
+              sleep 5
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Aerospike did not start" >&2
+          exit 1
+      - name: Test FastBatch without -race
+        run: |
+          set -o pipefail
+          go test -count=1 -v -run 'TestFast|TestExpTemplate|FuzzFastResultParse' . -args -h 127.0.0.1 -p 3000 -n test 2>&1 | tee fast.log
+          grep -q -- '^--- PASS: TestFastBatchKeysZeroAlloc ' fast.log
+          grep -q -- '^--- PASS: TestFastOpsZeroAlloc ' fast.log
+          grep -q -- '^--- PASS: TestFastExpWriteZeroAlloc ' fast.log
+          grep -q -- '^--- PASS: TestFastCommandWriteBufferZeroAlloc ' fast.log
+          grep -q -- '^--- PASS: TestFastResultParseZeroAlloc ' fast.log
+          grep -q -- '^--- PASS: TestFastExecuteZeroAlloc ' fast.log
+          grep -q -- '^--- PASS: TestFastExecutePoolZeroAlloc ' fast.log
+      - name: Test FastBatch with -race
+        run: go test -race -count=1 -v -run 'TestFast|TestExpTemplate' . -args -h 127.0.0.1 -p 3000 -n test
