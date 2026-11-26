@@ -102,7 +102,7 @@ func (clnt *Client) ExecuteFast(policy *BatchPolicy, b *FastBatch) Error {
 	}
 
 	err = clnt.runFast(policy, b)
-	if write {
+	if write || (err != nil && !policy.AllowPartialResults) {
 		return err
 	}
 	filteredOut := 0
