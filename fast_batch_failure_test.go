@@ -214,6 +214,44 @@ func TestFastRejectsErrorDetailVerbosity(t *testing.T) {
 	}
 }
 
+// A batch of one key runs the official single-record path, which keeps going
+// on a server error and stops on a client error.
+func TestFastSingleKeyAbortParity(t *testing.T) {
+	clnt := fastServerClient(t)
+	if err := clnt.Put(nil, fastKey(t, fastBlobKey('s', 0)), BinMap{"n": "str"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := clnt.Delete(nil, fastKey(t, fastBlobKey('s', 1))); err != nil {
+		t.Fatal(err)
+	}
+	badWrite := newFastPair()
+	badWrite.addWrite(t, fastBlobKey('s', 0), NewBatchWritePolicy(), 1)
+	missingRead := newFastPair()
+	missingRead.addRead(t, fastBlobKey('s', 1), []string{"n"})
+
+	for _, p := range []*fastPair{badWrite, missingRead} {
+		err := clnt.ExecuteFast(nil, p.b)
+		oerr := p.official(clnt, nil)
+		if err != nil || oerr != nil {
+			t.Fatalf("write=%v: err = %v, official %v; want both nil", p.write, err, oerr)
+		}
+		p.assertRecords(t)
+	}
+	if rc := badWrite.b.ResultCode(0); rc != types.BIN_TYPE_ERROR {
+		t.Fatalf("bad write: %v", rc)
+	}
+
+	policy := NewBatchPolicy()
+	policy.TotalTimeout = time.Microsecond
+	for _, p := range []*fastPair{badWrite, missingRead} {
+		err := clnt.ExecuteFast(policy, p.b)
+		oerr := p.official(clnt, policy)
+		if err == nil || oerr == nil || !oerr.Matches(types.TIMEOUT) || err.resultCode() != oerr.resultCode() {
+			t.Fatalf("write=%v: err = %v, official %v; want both TIMEOUT", p.write, err, oerr)
+		}
+	}
+}
+
 // cutProxy forwards each connection to target and closes it after cut reply
 // bytes.
 type cutProxy struct {
@@ -426,15 +464,7 @@ func TestFastSingleKeyNodeParity(t *testing.T) {
 			if p.b.nCmds != 3 || singles != 1 {
 				t.Fatalf("write=%v: %d commands, %d with one key; want 3 and 1", p.write, p.b.nCmds, singles)
 			}
-			// The official single-record path returns the record's error from
-			// Operate; a batch command reports it only on the record.
-			if p.write && odd {
-				if err != nil || oerr == nil || !oerr.Matches(types.BIN_TYPE_ERROR) {
-					t.Fatalf("single bad write: err = %v, official %v", err, oerr)
-				}
-			} else {
-				assertSameErr(t, err, oerr)
-			}
+			assertSameErr(t, err, oerr)
 			p.assertRecords(t)
 			want := types.OK
 			switch {
