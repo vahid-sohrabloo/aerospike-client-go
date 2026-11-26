@@ -50,6 +50,9 @@ func (clnt *Client) checkFast(policy *BatchPolicy, b *FastBatch, write bool) Err
 	if policy.Txn != nil {
 		return newError(types.PARAMETER_ERROR, "FastBatch does not support transactions")
 	}
+	if batchErrorVerbosityBits(policy) != 0 {
+		return newError(types.PARAMETER_ERROR, "FastBatch does not support error detail verbosity")
+	}
 	if policy.FilterExpression != nil || !write && clnt.getUsableBatchReadPolicy(nil).FilterExpression != nil {
 		return newError(types.PARAMETER_ERROR, "FastBatch does not support filter expressions")
 	}

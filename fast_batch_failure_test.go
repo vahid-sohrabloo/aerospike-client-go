@@ -187,6 +187,33 @@ func TestFastRejectsFilterExpression(t *testing.T) {
 	}
 }
 
+// A negative verbosity encodes as 0 in the official client, so it is accepted.
+func TestFastRejectsErrorDetailVerbosity(t *testing.T) {
+	clnt := fastServerClient(t)
+	putFastInts(t, clnt, 'w', 4)
+	for _, verbosity := range []int{-1, 1, 2, 3, 4} {
+		for _, p := range []*fastPair{fastReadPair(t, 'w', 4), fastWritePair(t, 'w', 4)} {
+			policy := NewBatchPolicy()
+			policy.ErrorDetailVerbosity = verbosity
+			err := clnt.ExecuteFast(policy, p.b)
+			if verbosity < 0 {
+				if err != nil {
+					t.Fatalf("verbosity=%d write=%v: err = %v", verbosity, p.write, err)
+				}
+				continue
+			}
+			if err == nil || !err.Matches(types.PARAMETER_ERROR) {
+				t.Fatalf("verbosity=%d write=%v: err = %v, want PARAMETER_ERROR", verbosity, p.write, err)
+			}
+			for i := range p.b.Len() {
+				if rc := p.b.ResultCode(i); rc != types.NO_RESPONSE || p.b.InDoubt(i) {
+					t.Fatalf("verbosity=%d write=%v record %d: code %v inDoubt %v", verbosity, p.write, i, rc, p.b.InDoubt(i))
+				}
+			}
+		}
+	}
+}
+
 // cutProxy forwards each connection to target and closes it after cut reply
 // bytes.
 type cutProxy struct {
