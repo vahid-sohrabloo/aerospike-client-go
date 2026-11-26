@@ -53,6 +53,7 @@ func (p *fastExec) worker(cmd *fastBatchCommand) {
 	defer p.workers.Add(-1)
 	for {
 		runNode(cmd)
+		cmd = nil
 		select {
 		case cmd = <-p.work:
 		case <-p.done:
