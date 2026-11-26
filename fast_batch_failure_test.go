@@ -246,8 +246,13 @@ func TestFastSingleKeyAbortParity(t *testing.T) {
 	for _, p := range []*fastPair{badWrite, missingRead} {
 		err := clnt.ExecuteFast(policy, p.b)
 		oerr := p.official(clnt, policy)
-		if err == nil || oerr == nil || !oerr.Matches(types.TIMEOUT) || err.resultCode() != oerr.resultCode() {
-			t.Fatalf("write=%v: err = %v, official %v; want both TIMEOUT", p.write, err, oerr)
+		if oerr == nil || !oerr.Matches(types.TIMEOUT) {
+			t.Fatalf("write=%v: official err = %v, want TIMEOUT", p.write, oerr)
+		}
+		// Below the outer error, the chain and iteration depend on whether an
+		// attempt started before the deadline.
+		if err == nil || err.resultCode() != oerr.resultCode() || err.IsInDoubt() != oerr.IsInDoubt() {
+			t.Fatalf("write=%v: err = %v, official %v", p.write, err, oerr)
 		}
 	}
 }
