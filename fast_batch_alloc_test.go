@@ -93,3 +93,48 @@ func TestFastExpWriteZeroAlloc(t *testing.T) {
 		t.Fatalf("opCount = %d, want %d", got, 16*len(shapes))
 	}
 }
+
+func TestFastCommandWriteBufferZeroAlloc(t *testing.T) {
+	clnt, policy := fastTestClient(), fastTestBatchPolicy()
+	node := &Node{}
+	key := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+
+	rb := NewFastBatch("test", "sess")
+	mapBins, eidBins := NewFastBins(fastTestMapBins...), NewFastBins(fastTestEIDBins...)
+	for range 4 {
+		rb.AddReadBlob(key, mapBins)
+		rb.AddReadString("eid:abc", eidBins)
+	}
+
+	wb := NewFastBatch("test", "sess")
+	mp := NewMapPolicy(MapOrder.UNORDERED, MapWriteMode.UPDATE)
+	wp := NewFastWritePolicy(fastTestWritePolicy())
+	for range 4 {
+		w := wb.AddWriteBlob(key, wp)
+		w.MapIncrementInt("bc", mp, 7, 1)
+		w.ListAppendIntInMapKey("la", DefaultListPolicy(), 7, MapOrder.UNORDERED, 2)
+		w.ListTrimInMapKey("la", 7, MapOrder.UNORDERED, -4, 4)
+		w.AddInt("n", 1)
+	}
+
+	buf := make([]byte, 16)
+	for _, b := range []*FastBatch{rb, wb} {
+		run := func() {
+			b.nCmds = 0
+			cmd := b.cmdFor(node)
+			cmd.client, cmd.policy = clnt, policy
+			for i := range b.Len() {
+				cmd.offsets = append(cmd.offsets, i)
+			}
+			cmd.dataBuffer = buf
+			if err := cmd.writeBuffer(cmd); err != nil {
+				t.Fatal(err)
+			}
+			buf = cmd.dataBuffer
+		}
+		run()
+		if allocs := testing.AllocsPerRun(100, run); allocs != 0 {
+			t.Fatalf("allocs = %v, want 0", allocs)
+		}
+	}
+}
