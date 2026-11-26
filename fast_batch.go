@@ -9,6 +9,9 @@ type FastBatch struct {
 	set       string
 	keys      []Key
 	hasher    keyWriter
+	entries   []fastEntry
+	opBuf     []byte
+	cur       FastWrite
 }
 
 func NewFastBatch(namespace, set string) *FastBatch {
@@ -17,6 +20,8 @@ func NewFastBatch(namespace, set string) *FastBatch {
 
 func (b *FastBatch) Reset() {
 	b.keys = b.keys[:0]
+	b.entries = b.entries[:0]
+	b.opBuf = b.opBuf[:0]
 }
 
 func (b *FastBatch) Len() int {
@@ -35,10 +40,10 @@ func (b *FastBatch) addKeyString(k string) int {
 	return b.endKey()
 }
 
-func (b *FastBatch) beginKey(particleType int) {
+func (b *FastBatch) beginKey(keyType int) {
 	b.hasher.hash.Reset()
 	b.hasher.WriteString(b.set)
-	b.hasher.WriteByte(byte(particleType))
+	b.hasher.WriteByte(byte(keyType))
 }
 
 func (b *FastBatch) endKey() int {

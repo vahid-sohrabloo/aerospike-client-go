@@ -20,3 +20,42 @@ func TestFastBatchKeysZeroAlloc(t *testing.T) {
 		t.Fatalf("allocs = %v, want 0", allocs)
 	}
 }
+
+func TestFastOpsZeroAlloc(t *testing.T) {
+	b := NewFastBatch("test", "sess")
+	mp := NewMapPolicy(MapOrder.UNORDERED, MapWriteMode.UPDATE)
+	lp := DefaultListPolicy()
+	wp := NewFastWritePolicy(NewBatchWritePolicy())
+	bins := NewFastBins("rc", "bc", "bs", "la")
+	key := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	run := func() {
+		b.Reset()
+		for range 8 {
+			b.AddReadBlob(key, bins)
+			b.AddReadString("eid:abc", bins)
+		}
+		b.Reset()
+		w := b.AddWriteBlob(key, wp)
+		for bidder := range int64(16) {
+			k := bidder<<28 | 0xabcdef
+			w.MapIncrementInt("bc", mp, k, 1)
+			w.MapIncrementInt("bs", mp, k, 123456789)
+			w.MapIncrementInt("rc", mp, k, 1)
+			w.MapIncrementInt("wc", mp, k, 1)
+			w.ListAppendIntInMapKey("la", lp, k, MapOrder.UNORDERED, 3)
+			w.ListTrimInMapKey("la", k, MapOrder.UNORDERED, -4, 4)
+			w.AddInt("n", 1)
+		}
+		for range 7 {
+			w.AddInt("g", 123456789)
+		}
+	}
+	run()
+	allocs := testing.AllocsPerRun(100, run)
+	if allocs != 0 {
+		t.Fatalf("allocs = %v, want 0", allocs)
+	}
+	if got := b.entries[0].opCount; got != 16*7+7 {
+		t.Fatalf("opCount = %d, want %d", got, 16*7+7)
+	}
+}
